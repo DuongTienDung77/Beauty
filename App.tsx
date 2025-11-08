@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleGenAI, Modality } from "@google/genai";
 
@@ -56,71 +57,21 @@ const App: React.FC = () => {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // --- API Key Management State ---
-  const [manualApiKeyInput, setManualApiKeyInput] = useState('');
-  const [manualApiKey, setManualApiKey] = useState<string | null>(null);
-  const [apiStatus, setApiStatus] = useState<'checking' | 'connected' | 'error' | 'no_key'>('checking');
-  const [apiStatusMessage, setApiStatusMessage] = useState('Đang kiểm tra...');
-
   // --- VIP State Management ---
   const [isVip, setIsVip] = useState<boolean>(false);
   const [showVipModal, setShowVipModal] = useState<boolean>(false);
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
 
-  const getApiKey = useCallback(() => {
-    return manualApiKey || process.env.API_KEY;
-  }, [manualApiKey]);
+  // --- API Key State Management ---
+  const [manualApiKey, setManualApiKey] = useState<string>('');
+  const [manualApiKeyInput, setManualApiKeyInput] = useState<string>('');
+  const [hasManualApiKeyStored, setHasManualApiKeyStored] = useState<boolean>(false);
+  const [apiStatus, setApiStatus] = useState<'connected' | 'no_key'>('no_key');
+  const [apiStatusMessage, setApiStatusMessage] = useState<string>('Đang kiểm tra...');
 
-  const testApiKey = useCallback(async (key: string | undefined | null) => {
-    if (!key) {
-      setApiStatus('no_key');
-      setApiStatusMessage('Chưa có khóa');
-      return;
-    }
-
-    setApiStatus('checking');
-    setApiStatusMessage('Đang kiểm tra...');
-    setError(null);
-
-    try {
-      const ai = new GoogleGenAI({ apiKey: key });
-      await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: 'test' });
-      setApiStatus('connected');
-      setApiStatusMessage('Đã kết nối');
-    } catch (error) {
-      console.error("API Key test failed:", error);
-      setApiStatus('error');
-      setApiStatusMessage('Khóa không hợp lệ');
-    }
-  }, []);
-
-  const handleSaveManualApiKey = useCallback(() => {
-    const keyToSave = manualApiKeyInput.trim();
-    if (keyToSave) {
-      localStorage.setItem('gemini_api_key', keyToSave);
-      setManualApiKey(keyToSave);
-      setManualApiKeyInput('');
-      testApiKey(keyToSave);
-    }
-  }, [manualApiKeyInput, testApiKey]);
-
-  const handleClearManualApiKey = useCallback(() => {
-    localStorage.removeItem('gemini_api_key');
-    setManualApiKey(null);
-    testApiKey(process.env.API_KEY);
-  }, [testApiKey]);
 
   useEffect(() => {
-    const storedKey = localStorage.getItem('gemini_api_key');
-    if (storedKey) {
-      setManualApiKey(storedKey);
-      testApiKey(storedKey);
-    } else {
-      testApiKey(process.env.API_KEY);
-    }
-  }, [testApiKey]);
-
-  useEffect(() => {
+    // VIP Status
     try {
       const vipStatusString = localStorage.getItem('vipStatus');
       if (vipStatusString) {
@@ -135,7 +86,45 @@ const App: React.FC = () => {
       console.error("Failed to parse VIP status from localStorage", e);
       localStorage.removeItem('vipStatus');
     }
+
+    // API Key Status
+    const storedKey = localStorage.getItem('manualApiKey');
+    if (storedKey) {
+        setManualApiKey(storedKey);
+        setHasManualApiKeyStored(true);
+        setApiStatus('connected');
+        setApiStatusMessage('Đã đặt khóa thủ công');
+    } else if (process.env.API_KEY) {
+        setApiStatus('connected');
+        setApiStatusMessage('Đã đặt khóa môi trường');
+    } else {
+        setApiStatus('no_key');
+        setApiStatusMessage('Không có khóa API');
+    }
   }, []);
+
+  const handleSaveManualApiKey = () => {
+    if (!manualApiKeyInput.trim()) return;
+    localStorage.setItem('manualApiKey', manualApiKeyInput.trim());
+    setManualApiKey(manualApiKeyInput.trim());
+    setHasManualApiKeyStored(true);
+    setApiStatus('connected');
+    setApiStatusMessage('Đã đặt khóa thủ công');
+    setManualApiKeyInput('');
+  };
+
+  const handleClearManualApiKey = () => {
+      localStorage.removeItem('manualApiKey');
+      setManualApiKey('');
+      setHasManualApiKeyStored(false);
+      if (process.env.API_KEY) {
+          setApiStatus('connected');
+          setApiStatusMessage('Đã đặt khóa môi trường');
+      } else {
+          setApiStatus('no_key');
+          setApiStatusMessage('Không có khóa API');
+      }
+  };
 
   const requestVipAccess = (action: () => void) => {
     setPendingAction(() => action);
@@ -167,9 +156,11 @@ const App: React.FC = () => {
       style: Style | null,
       currentIntensity: number
     ): Promise<string> => {
-      const apiKey = getApiKey();
+      const apiKey = manualApiKey || process.env.API_KEY;
       if (!apiKey) {
-        throw new Error("API Key not found. Please add your key in the API Key Management section.");
+        setApiStatus('no_key');
+        setApiStatusMessage('Không có khóa API');
+        throw new Error("API Key is not configured. Please set it in the management section.");
       }
       const ai = new GoogleGenAI({ apiKey });
       const base64Data = baseImage.split(',')[1];
@@ -220,8 +211,8 @@ const App: React.FC = () => {
         }
       }
       
-      throw new Error("No image was generated. The response may have been blocked.");
-  }, [getApiKey]);
+      throw new Error("No image was generated. The response may have been blocked or the API key may be invalid.");
+  }, [manualApiKey]);
 
   const handleInteractiveModification = useCallback(async (
       { subFeature = activeSubFeature, style = activeStyle, newIntensity = intensity }: 
@@ -419,22 +410,20 @@ const App: React.FC = () => {
         </header>
 
         <main className="space-y-6">
-          <div className="flex flex-col gap-4 p-4 sm:p-6 border border-slate-200 rounded-xl bg-white/60 backdrop-blur-sm">
-            <h2 className="text-xl font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
-              1. Quản lý Khóa API
+          {/* API Key Management Section */}
+          <div className="flex flex-col gap-4 p-6 border border-slate-200 rounded-2xl bg-white/60 backdrop-blur-sm shadow-inner">
+            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+              Quản lý Khóa API
               <span className={`px-3 py-1 text-xs font-semibold rounded-full ${
-                  apiStatus === 'connected' ? 'bg-green-100 text-green-800' :
-                  apiStatus === 'error' || apiStatus === 'no_key' ? 'bg-red-100 text-red-800' :
-                  apiStatus === 'checking' ? 'bg-yellow-100 text-yellow-800' :
-                  'bg-slate-100 text-slate-800'
+                  apiStatus === 'connected' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
               }`}>
                   {apiStatusMessage}
               </span>
             </h2>
-            <p className="text-slate-700 text-sm">
-              Bạn có thể nhập khóa API Gemini của mình thủ công để sử dụng. Khóa này sẽ được ưu tiên hơn biến môi trường.
+            <p className="text-slate-600 text-sm">
+              Bạn có thể nhập khóa API Gemini của mình để sử dụng. Khóa này sẽ được ưu tiên hơn và lưu trong trình duyệt của bạn.
               <br />
-              <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-xs">
+              <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-pink-600 hover:underline text-xs font-semibold">
                 Xem tài liệu về thanh toán và hạn mức sử dụng.
               </a>
             </p>
@@ -443,34 +432,34 @@ const App: React.FC = () => {
                 type="password" 
                 value={manualApiKeyInput}
                 onChange={(e) => setManualApiKeyInput(e.target.value)}
-                className="flex-grow p-2 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-pink-500 focus:border-pink-500"
-                placeholder={manualApiKey ? "Khóa API đã lưu (không hiển thị)" : "Nhập khóa API của bạn"}
+                className="flex-grow p-2 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
+                placeholder={hasManualApiKeyStored ? "Khóa API đã được lưu (ẩn)" : "Nhập khóa API của bạn"}
                 disabled={isLoading} 
               />
               <Button onClick={handleSaveManualApiKey} disabled={isLoading || !manualApiKeyInput.trim()} variant="primary"> 
-                Lưu khóa API
+                Lưu khóa
               </Button>
-              <Button onClick={handleClearManualApiKey} disabled={isLoading || !manualApiKey} variant="secondary"> 
-                Xóa khóa API
+              <Button onClick={handleClearManualApiKey} disabled={isLoading || !hasManualApiKeyStored} variant="secondary"> 
+                Xóa khóa
               </Button>
             </div>
-            {manualApiKey && (
+            {hasManualApiKeyStored && (
               <p className="text-sm text-green-600">
-                &#10003; Khóa API thủ công đang được sử dụng.
+                &#10003; Đang sử dụng khóa API được lưu thủ công.
               </p>
             )}
-            {!manualApiKey && !!process.env.API_KEY && (
+            {!hasManualApiKeyStored && !!process.env.API_KEY && (
                <p className="text-sm text-blue-600">
-                &#10003; Đang sử dụng khóa API từ biến môi trường.
+                &#10003; Đang sử dụng khóa API được định cấu hình sẵn.
                </p>
             )}
-            {!manualApiKey && !process.env.API_KEY && (
+            {!hasManualApiKeyStored && !process.env.API_KEY && (
               <p className="text-sm text-red-600">
-                &#9888; Không có khóa API nào được thiết lập. Vui lòng nhập khóa API.
+                &#9888; Không có khóa API nào được đặt. Vui lòng nhập khóa để sử dụng ứng dụng.
               </p>
             )}
           </div>
-
+          
           <div className="relative">
             <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
             
@@ -541,7 +530,7 @@ const App: React.FC = () => {
               <p>MB BANK : <span className="font-bold text-slate-800">0917939111</span></p>
               
               <div>
-                  <p>THAM GIA NHÓM ĐỂ ĐƯỢC HỖ TRỢ MIỄN PHÍ:</p>
+                  <p>THAM GIA NHÓM ĐỂ ĐƯỢỢC HỖ TRỢ MIỄN PHÍ:</p>
                   <a 
                       href="https://zalo.me/g/xxgxqm429" 
                       target="_blank" 
