@@ -1,0 +1,7 @@
+{
+  "name": "Beauty AI Simulator V1.1",
+  "description": "Cập nhật Khung API",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
